@@ -1,0 +1,1057 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lost & Found Hub (Secured Admin) + Gemini AI</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Load Lucide Icons (used for the + and Search buttons) -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- Load Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, onSnapshot, addDoc, doc, updateDoc, query, where, Timestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Global Firebase variables accessible to the main script
+        window.firebase = {
+            initializeApp,
+            getAuth,
+            signInAnonymously,
+            signInWithCustomToken,
+            onAuthStateChanged,
+            getFirestore,
+            collection,
+            onSnapshot,
+            addDoc,
+            doc,
+            updateDoc,
+            query,
+            where,
+            Timestamp,
+            setLogLevel
+        };
+    </script>
+    <style>
+        /* Custom styles based on the user's wireframe */
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f7f7f7;
+        }
+        .header-bar {
+            background-color: #C00000; /* Deep Red */
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+        .fab {
+            background-color: #C00000;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .fab:hover {
+            transform: scale(1.05);
+            box-shadow: 0 10px 15px -3px rgba(192, 0, 0, 0.3);
+        }
+        .item-card {
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.06);
+            transition: transform 0.2s;
+        }
+        .item-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
+        }
+        /* Custom modal for smooth transition */
+        .modal-overlay {
+            visibility: hidden;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        .modal-overlay.active {
+            visibility: visible;
+            opacity: 1;
+        }
+        /* Style for B&W preview */
+        #image-preview-bw {
+            filter: grayscale(100%);
+            width: 100%;
+            height: 100px;
+            object-fit: contain;
+            background-color: #e5e7eb;
+            border-radius: 8px;
+            display: none;
+        }
+        /* Utility for status colors */
+        .status-unclaimed { @apply bg-red-100 text-red-700; }
+        .status-claimed { @apply bg-green-100 text-green-700; }
+        
+        /* Post Success Popup Styling */
+        #post-success-popup {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%) translateY(-100px);
+            z-index: 50;
+            opacity: 0;
+            transition: opacity 0.5s, transform 0.5s;
+        }
+        #post-success-popup.show {
+            opacity: 1;
+            transform: translateX(-50%) translateY(0);
+        }
+    </style>
+</head>
+<body class="min-h-screen">
+
+    <!-- Hidden Canvas for Image Processing -->
+    <canvas id="bw-canvas" style="display:none;"></canvas>
+    
+    <!-- Post Success Pop-up -->
+    <div id="post-success-popup" class="bg-green-600 text-white p-4 rounded-lg shadow-xl max-w-sm text-center">
+        <i data-lucide="check-circle" class="inline w-5 h-5 mr-2"></i>
+        Item posted successfully and is live!
+    </div>
+
+    <!-- Header Bar -->
+    <header class="header-bar sticky top-0 z-10">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between h-16">
+            <!-- Left Side: Logo/Circle -->
+            <div class="flex items-center space-x-4">
+                <div class="w-10 h-10 bg-white rounded-full border-2 border-white"></div>
+                <h1 class="text-white text-xl font-bold italic">L&F Hub</h1>
+            </div>
+
+            <!-- Right Side: Links -->
+            <nav class="flex space-x-6 text-white text-sm font-semibold">
+                <a href="mailto:support@lostandfound.com?subject=Contact%20Us%20Regarding%20Lost%20Item%20App" class="hover:underline" target="_blank">contact us</a>
+                <button onclick="openModal('about-modal')" class="hover:underline">about</button>
+                <button onclick="openModal('help-modal')" class="hover:underline">help</button>
+                <button id="admin-button" onclick="openAdminModal()" class="hover:underline font-extrabold text-yellow-300 hidden">ADMIN</button>
+            </nav>
+        </div>
+    </header>
+
+    <!-- Main Content Area -->
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <h2 class="text-3xl font-extrabold text-gray-800 mb-6">Unclaimed Items</h2>
+        
+        <!-- Item List Container -->
+        <div id="item-list" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <!-- Item cards will be injected here by JavaScript -->
+            <p id="loading-message" class="col-span-full text-center text-gray-500">Loading lost and found items...</p>
+        </div>
+    </main>
+
+    <!-- Floating Action Buttons (FABs) -->
+    <div class="fixed bottom-6 right-6 flex flex-col space-y-4 z-20">
+        <!-- Search Button (Magnifying Glass) -->
+        <button id="search-fab" onclick="openModal('search-modal')" 
+                class="fab w-14 h-14 rounded-full flex items-center justify-center shadow-2xl">
+            <i data-lucide="search" class="w-7 h-7 text-white"></i>
+        </button>
+        <!-- Add Post Button (+) -->
+        <button id="add-fab" onclick="openModal('post-modal')" 
+                class="fab w-16 h-16 rounded-full flex items-center justify-center shadow-2xl">
+            <i data-lucide="plus" class="w-8 h-8 text-white"></i>
+        </button>
+    </div>
+
+    <!-- ----------------------- MODALS ----------------------- -->
+
+    <!-- Report Found Item Modal -->
+    <div id="post-modal" class="modal-overlay fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-30">
+        <div class="bg-white rounded-xl p-8 max-w-lg w-full shadow-2xl transform transition-all">
+            <h3 class="text-2xl font-bold text-gray-800 mb-6 border-b pb-2">Report a Found Item (Image is B&W)</h3>
+            <form id="post-form" onsubmit="handlePostSubmission(event)">
+                
+                <!-- Image Upload (File input) -->
+                <div class="mb-4">
+                    <label for="image_file" class="block text-sm font-medium text-gray-700">Upload Image of Item</label>
+                    <input type="file" id="image_file" accept="image/*" required
+                           class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
+                    <p class="text-xs text-red-500 mt-1">Image will be automatically converted to Black & White before posting.</p>
+                </div>
+
+                <div class="mb-4">
+                    <img id="image-preview-bw" src="" alt="Black & White Image Preview">
+                </div>
+                
+                <!-- Name of Item -->
+                <div class="mb-4">
+                    <label for="title" class="block text-sm font-medium text-gray-700">Name of Item (e.g., Blue Key Fob, iPhone 14)</label>
+                    <input type="text" id="title" name="title" required maxlength="100"
+                           class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
+                </div>
+                
+                <!-- Category Select -->
+                <div class="mb-4">
+                    <label for="category" class="block text-sm font-medium text-gray-700">Item Category</label>
+                    <select id="category" name="category" required
+                            class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
+                        <option value="">-- Select Category --</option>
+                        <option value="electronics">Electronics</option>
+                        <option value="keys">Keys</option>
+                        <option value="wallet">Wallets/Bags</option>
+                        <option value="apparel">Apparel/Clothing</option>
+                        <option value="id_card">IDs/Cards</option>
+                        <option value="other">Other</option>
+                    </select>
+                </div>
+
+
+                <!-- Item Description (with Gemini button) -->
+                <div class="mb-4">
+                    <label for="description" class="block text-sm font-medium text-gray-700">Detailed Description (Color, unique markings)</label>
+                    <textarea id="description" name="description" rows="3" required
+                              class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500"></textarea>
+                    <button type="button" onclick="generateDescription()" id="generate-desc-btn"
+                            class="mt-2 text-xs font-semibold px-3 py-1 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition disabled:bg-gray-400">
+                        ✨ Generate Description
+                    </button>
+                    <p id="desc-ai-message" class="text-xs text-gray-500 mt-1"></p>
+                </div>
+
+                <!-- Location Found -->
+                <div class="mb-4">
+                    <label for="location" class="block text-sm font-medium text-gray-700">Exact Location Item Was Found</label>
+                    <input type="text" id="location" name="location" required
+                           class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
+                </div>
+                
+                <!-- Where to Claim -->
+                <div class="mb-4">
+                    <label for="claim_location" class="block text-sm font-medium text-gray-700">Where Can the Owner Claim This Item?</label>
+                    <input type="text" id="claim_location" name="claim_location" required
+                           class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
+                </div>
+
+                <!-- Contact Details -->
+                <div class="mb-6">
+                    <label for="contact" class="block text-sm font-medium text-gray-700">Your Contact Details (Email or Phone)</label>
+                    <input type="text" id="contact" name="contact" required
+                           class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
+                </div>
+                
+                <input type="hidden" id="processed_image_data">
+
+                <div class="flex justify-end space-x-3">
+                    <button type="button" onclick="closeModal('post-modal')"
+                            class="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-200 rounded-lg hover:bg-gray-300 transition">Cancel</button>
+                    <button type="submit" id="post-submit-btn"
+                            class="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition">Post Item</button>
+                </div>
+            </form>
+            <p id="post-message" class="mt-4 text-sm text-center hidden"></p>
+        </div>
+    </div>
+
+    <!-- Admin Panel Modal -->
+    <div id="admin-modal" class="modal-overlay fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-30">
+        <div class="bg-white rounded-xl p-8 max-w-4xl w-full shadow-2xl transform transition-all overflow-y-auto max-h-[90vh]">
+            <h3 class="text-2xl font-bold text-gray-800 mb-6 border-b pb-2">Admin Panel: All Item Reports (SECURED)</h3>
+            <div id="admin-content">
+                <div class="text-sm text-gray-600 mb-4">
+                    Your current User ID: <span id="admin-user-id" class="font-mono text-xs">Loading...</span>
+                    <p class="text-red-500 font-semibold mt-1" id="admin-access-msg">
+                        <i data-lucide="lock" class="inline w-4 h-4 mr-1"></i>Access denied. This panel requires a valid Admin UID.
+                    </p>
+                </div>
+                
+                <div id="admin-table-container" class="overflow-x-auto hidden">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Item ID / Image</th>
+                                <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Details</th>
+                                <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Finder (User ID)</th>
+                                <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date Posted</th>
+                                <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                                <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="admin-item-table-body" class="bg-white divide-y divide-gray-200">
+                            <tr><td colspan="6" class="text-center p-4 text-gray-500">Fetching secured data...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="mt-6 flex justify-end">
+                <button onclick="closeModal('admin-modal')"
+                        class="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition">Close Admin Panel</button>
+            </div>
+        </div>
+    </div>
+
+
+    <!-- Search Modal, About Modal, Help Modal (previous modals are included here) -->
+    <div id="search-modal" class="modal-overlay fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-30">
+        <div class="bg-white rounded-xl p-8 max-w-lg w-full shadow-2xl transform transition-all">
+            <h3 class="text-2xl font-bold text-gray-800 mb-6 border-b pb-2">Search Lost Items</h3>
+            <form id="search-form" onsubmit="handleSearch(event)">
+                <div class="mb-4">
+                    <label for="search-term" class="block text-sm font-medium text-gray-700">Keyword (e.g., 'keys', 'wallet', 'blue bag')</label>
+                    <input type="text" id="search-term" placeholder="Enter search keyword"
+                           class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
+                </div>
+                <div class="mb-6">
+                    <label for="category-filter" class="block text-sm font-medium text-gray-700">Category</label>
+                    <select id="category-filter"
+                            class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
+                        <option value="">All Categories</option>
+                        <option value="electronics">Electronics</option>
+                        <option value="keys">Keys</option>
+                        <option value="wallet">Wallets/Bags</option>
+                        <option value="apparel">Apparel/Clothing</option>
+                        <option value="id_card">IDs/Cards</option>
+                        <option value="other">Other</option>
+                    </select>
+                </div>
+
+                <div class="flex justify-end space-x-3">
+                    <button type="button" onclick="closeModal('search-modal')"
+                            class="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-200 rounded-lg hover:bg-gray-300 transition">Cancel</button>
+                    <button type="submit"
+                            class="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition">Apply Filters</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Simple Info Modals (About and Help) -->
+    <div id="about-modal" class="modal-overlay fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-30">
+        <div class="bg-white rounded-xl p-8 max-w-md w-full shadow-2xl">
+            <h3 class="text-2xl font-bold text-gray-800 mb-4">About the L&F Hub</h3>
+            <p class="text-gray-600 mb-4">
+                This hub is a community-driven platform designed to quickly match lost items with their finders. We use real-time synchronization to ensure the latest found items are immediately visible to potential owners.
+            </p>
+            <p class="text-gray-600">
+                Thank you for helping us reunite lost possessions with their owners!
+            </p>
+            <div class="mt-6 flex justify-end">
+                <button onclick="closeModal('about-modal')"
+                        class="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="help-modal" class="modal-overlay fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-30">
+        <div class="bg-white rounded-xl p-8 max-w-md w-full shadow-2xl">
+            <h3 class="text-2xl font-bold text-gray-800 mb-4">Help & Usage</h3>
+            <ul class="list-disc list-inside text-gray-700 space-y-2">
+                <li>Use the **(+) button** to report an item you found. Please include an image file which will be converted to B&W.</li>
+                <li>Use the **(🔍) button** to search and filter through all unclaimed items to find your lost possession.</li>
+                <li>The **ADMIN** link is for moderation.</li>
+            </ul>
+            <div class="mt-6 flex justify-end">
+                <button onclick="closeModal('help-modal')"
+                        class="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition">Close</button>
+            </div>
+        </div>
+    </div>
+
+
+    <!-- JavaScript and Firebase Logic -->
+    <script type="module">
+        // Import necessary components from the global 'firebase' object established above
+        const { 
+            initializeApp, getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, 
+            getFirestore, collection, onSnapshot, addDoc, doc, updateDoc, query, where, Timestamp, setLogLevel 
+        } = window.firebase;
+
+        // --- Configuration & Initialization ---
+        const API_URL_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/';
+        const API_KEY = ""; // Kept empty, provided by the environment
+
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-lostandfound-app-id';
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+
+        // 🛑 ADMIN SECURITY: REPLACE THIS PLACEHOLDER WITH YOUR OWN USER ID TO ENABLE THE ADMIN BUTTON.
+        // Get your user ID from the console log after running the app once.
+        const ADMIN_UID = "REPLACE_THIS_WITH_YOUR_USER_ID_TO_ENABLE_ADMIN_ACCESS"; 
+        
+        let app;
+        let db;
+        let auth;
+        let userId = 'anonymous';
+
+        // Paths for public data (accessible to everyone in this application)
+        const ITEMS_COLLECTION_PATH = `/artifacts/${appId}/public/data/items`;
+
+        /**
+         * Initializes Firebase and authenticates the user.
+         */
+        async function initializeAppAndAuth() {
+            try {
+                const loadingMessage = document.getElementById('loading-message');
+
+                if (Object.keys(firebaseConfig).length === 0) {
+                    console.error("Firebase configuration is missing.");
+                    loadingMessage.textContent = "Error: Firebase configuration is missing. Cannot load data. (Ensure you are running the app in the platform's Preview environment)";
+                    return;
+                }
+
+                app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+
+                const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+                // 1. Authenticate
+                if (initialAuthToken) {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                } else {
+                    await signInAnonymously(auth);
+                }
+
+                // 2. Set Auth State Listener
+                onAuthStateChanged(auth, (user) => {
+                    if (user) {
+                        userId = user.uid;
+                        console.log("User authenticated. User ID:", userId);
+                        
+                        // Show Admin Button if user is the Admin
+                        if (userId === ADMIN_UID && ADMIN_UID !== "REPLACE_THIS_WITH_YOUR_USER_ID_TO_ENABLE_ADMIN_ACCESS") {
+                            document.getElementById('admin-button').classList.remove('hidden');
+                        }
+                    } else {
+                        console.log("User signed out or failed to authenticate.");
+                        userId = crypto.randomUUID(); 
+                    }
+                    // Start listening for items immediately after the auth status is determined.
+                    listenForItems(); 
+                });
+
+            } catch (error) {
+                console.error("Firebase initialization or authentication failed:", error);
+                document.getElementById('loading-message').textContent = "Error during initialization: " + error.message;
+            }
+        }
+
+        // --- Image Processing (B&W Conversion) ---
+        const fileInput = document.getElementById('image_file');
+        const previewImage = document.getElementById('image-preview-bw');
+        const hiddenDataInput = document.getElementById('processed_image_data');
+        const canvas = document.getElementById('bw-canvas');
+        const ctx = canvas ? canvas.getContext('2d') : null;
+
+        if (fileInput) {
+            fileInput.addEventListener('change', function(e) {
+                const file = e.target.files[0];
+                if (file) {
+                    convertToGrayscale(file);
+                }
+            });
+        }
+
+        /**
+         * Converts an image file to grayscale using Canvas and saves the Base64 result.
+         */
+        async function convertToGrayscale(file) { // Added async keyword
+            if (!ctx) {
+                console.error("Canvas context not available for B&W conversion.");
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                const img = new Image();
+                img.onload = function() {
+                    canvas.width = img.width;
+                    canvas.height = img.height;
+                    
+                    ctx.drawImage(img, 0, 0, img.width, img.height);
+                    
+                    const imageData = ctx.getImageData(0, 0, img.width, img.height);
+                    const data = imageData.data;
+                    
+                    // Apply Grayscale Filter
+                    for (let i = 0; i < data.length; i += 4) {
+                        const avg = data[i] * 0.21 + data[i + 1] * 0.72 + data[i + 2] * 0.07;
+                        data[i] = avg;     
+                        data[i + 1] = avg; 
+                        data[i + 2] = avg; 
+                    }
+                    
+                    ctx.putImageData(imageData, 0, 0);
+                    
+                    const dataURL = canvas.toDataURL('image/png');
+                    hiddenDataInput.value = dataURL; 
+                    
+                    previewImage.src = dataURL;
+                    previewImage.style.display = 'block';
+                };
+                img.src = event.target.result;
+            };
+            reader.readAsDataURL(file);
+        }
+        
+        // --- Item Display & Real-time Listener (Frontend) ---
+
+        let currentUnsubscribe = null;
+        let currentSearchQuery = null;
+
+        /**
+         * Sets up the real-time listener for UNCLAIMED items for the public view.
+         */
+        function listenForItems() {
+            if (!db) {
+                // If DB is not ready, rely on initializeAppAndAuth to retry or display error
+                return;
+            }
+
+            if (currentUnsubscribe) {
+                currentUnsubscribe();
+            }
+
+            const itemsRef = collection(db, ITEMS_COLLECTION_PATH);
+            
+            // Query for UNCLAIMED items only
+            let itemsQuery = query(itemsRef, where("status", "==", "unclaimed"));
+            
+            if (currentSearchQuery && currentSearchQuery.category) {
+                if (currentSearchQuery.category !== "") {
+                    itemsQuery = query(itemsQuery, where("category", "==", currentSearchQuery.category));
+                }
+            }
+
+            const itemList = document.getElementById('item-list');
+            const loadingMessage = document.getElementById('loading-message'); 
+            
+            if (!itemList || !loadingMessage) {
+                 setTimeout(listenForItems, 100); 
+                 return;
+            }
+            
+            itemList.innerHTML = '';
+            loadingMessage.classList.remove('hidden');
+
+            currentUnsubscribe = onSnapshot(itemsQuery, (snapshot) => {
+                const items = [];
+                snapshot.forEach((doc) => {
+                    items.push({ id: doc.id, ...doc.data() });
+                });
+
+                loadingMessage.classList.add('hidden');
+                
+                // Client-side filtering for keyword
+                let filteredItems = items;
+                if (currentSearchQuery && currentSearchQuery.keyword) {
+                    const keyword = currentSearchQuery.keyword.toLowerCase();
+                    filteredItems = items.filter(item => 
+                        item.title.toLowerCase().includes(keyword) || 
+                        item.description.toLowerCase().includes(keyword)
+                    );
+                }
+
+                renderItems(filteredItems);
+
+            }, (error) => {
+                console.error("Error listening to Firestore (Public View): ", error);
+                loadingMessage.textContent = "Error loading data.";
+            });
+        }
+
+        /**
+         * Renders the list of items to the public DOM.
+         */
+        function renderItems(items) {
+            const itemList = document.getElementById('item-list');
+            itemList.innerHTML = '';
+
+            if (items.length === 0) {
+                itemList.innerHTML = '<p class="col-span-full text-center text-gray-500 p-8">No unclaimed items found matching the current filters.</p>';
+                return;
+            }
+
+            items.forEach(item => {
+                const categoryLabels = {
+                    electronics: 'Electronics 📱', keys: 'Keys 🔑', wallet: 'Wallet/Bag 💼', 
+                    apparel: 'Apparel 👕', id_card: 'ID/Card 💳', other: 'Other 📦'
+                };
+                const categoryLabel = categoryLabels[item.category] || 'Unknown';
+                
+                const postedDate = item.timestamp && item.timestamp.seconds 
+                    ? new Date(item.timestamp.seconds * 1000).toLocaleDateString()
+                    : 'Unknown Date';
+
+                const itemHtml = `
+                    <div class="item-card bg-white rounded-xl overflow-hidden shadow-lg border border-gray-100">
+                        <!-- Image is now the B&W Base64 Data URL -->
+                        <div class="h-48 bg-gray-200 overflow-hidden">
+                            <img src="${item.image_url}" onerror="this.onerror=null;this.src='https://placehold.co/400x300/e5e7eb/6b7280?text=B&W+Image+Failed';" 
+                                 alt="${item.title}" class="w-full h-full object-cover">
+                        </div>
+                        <div class="p-6">
+                            <div class="flex justify-between items-start mb-2">
+                                <h4 class="text-xl font-bold text-gray-900">${item.title}</h4>
+                                <span class="text-xs font-semibold px-2 py-1 rounded-full text-red-700 bg-red-100">${categoryLabel}</span>
+                            </div>
+                            <p class="text-sm text-gray-600 mb-4 truncate">${item.description}</p>
+                            
+                            <div class="space-y-2 text-sm text-gray-700">
+                                <p class="flex items-center"><i data-lucide="map-pin" class="w-4 h-4 mr-2 text-red-500"></i> **Found At:** ${item.location}</p>
+                                <p class="flex items-center"><i data-lucide="briefcase" class="w-4 h-4 mr-2 text-red-500"></i> **Claim At:** ${item.claim_location}</p>
+                                <p class="flex items-center"><i data-lucide="calendar" class="w-4 h-4 mr-2 text-red-500"></i> **Posted:** ${postedDate}</p>
+                                <p class="flex items-center"><i data-lucide="phone" class="w-4 h-4 mr-2 text-red-500"></i> **Contact:** <span class="font-mono text-xs ml-1">${item.contact}</span></p>
+                            </div>
+
+                            <button onclick="handleClaimItem('${item.id}', '${item.title}')"
+                                    class="mt-4 w-full py-2 bg-green-500 text-white rounded-lg font-semibold hover:bg-green-600 transition">
+                                I Claim This Item
+                            </button>
+                        </div>
+                    </div>
+                `;
+                itemList.insertAdjacentHTML('beforeend', itemHtml);
+            });
+            lucide.createIcons();
+        }
+
+        // --- CRUD Operations ---
+
+        /**
+         * Handles the form submission for a new found item.
+         */
+        async function handlePostSubmission(event) {
+            event.preventDefault();
+            const form = event.target;
+            const submitBtn = document.getElementById('post-submit-btn');
+            const messageEl = document.getElementById('post-message');
+
+            const imageData = form.elements['processed_image_data'].value;
+            
+            // Check if B&W image data was successfully created
+            if (!imageData) {
+                messageEl.textContent = "Error: Please select an image file and wait for the preview to load.";
+                messageEl.classList.remove('hidden');
+                messageEl.classList.add('text-red-500');
+                return;
+            }
+            
+            // Extract values using form element names/IDs
+            const title = form.elements['title'].value;
+            const description = form.elements['description'].value;
+            const location = form.elements['location'].value;
+            const claim_location = form.elements['claim_location'].value;
+            const contact = form.elements['contact'].value; 
+            const category = form.elements['category'].value; 
+            
+            if (!category || category === "") {
+                 messageEl.textContent = "Error: Please select a category.";
+                 messageEl.classList.remove('hidden');
+                 messageEl.classList.add('text-red-500');
+                 return;
+            }
+
+            const itemData = {
+                image_url: imageData, // This is the Base64 Data URL
+                title: title,
+                description: description,
+                location: location,
+                claim_location: claim_location,
+                contact: contact, 
+                status: "unclaimed",
+                timestamp: Timestamp.now(),
+                finder_user_id: userId, // ID of the poster
+                category: category 
+            };
+
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Posting...';
+            messageEl.classList.add('hidden');
+
+            try {
+                await addDoc(collection(db, ITEMS_COLLECTION_PATH), itemData);
+                
+                // Show success pop-up on home screen
+                showPostSuccessPopup();
+
+                messageEl.textContent = `Item posted successfully!`;
+                messageEl.classList.remove('hidden', 'text-red-500');
+                messageEl.classList.add('text-green-500');
+                form.reset();
+                
+                // Clear preview elements
+                previewImage.style.display = 'none';
+
+                setTimeout(() => {
+                    closeModal('post-modal');
+                    messageEl.classList.add('hidden');
+                }, 1000); // Shorter delay since we have the home screen notification
+
+            } catch (e) {
+                console.error("Error adding document: ", e);
+                messageEl.textContent = "Error posting item. Check console for details. (Possible Firestore Rules violation)";
+                messageEl.classList.remove('hidden', 'text-green-500');
+                messageEl.classList.add('text-red-500');
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Post Item';
+            }
+        }
+        
+        /**
+         * Allows the admin to mark an item as Claimed/Resolved.
+         * @param {string} itemId - The ID of the item to update.
+         */
+        async function markItemAsClaimed(itemId) {
+            if (!confirm('Are you sure you want to mark this item as CLAIMED? This action cannot be undone.')) {
+                return;
+            }
+            try {
+                const itemDocRef = doc(db, ITEMS_COLLECTION_PATH, itemId);
+                await updateDoc(itemDocRef, {
+                    status: "claimed"
+                });
+                // The onSnapshot listener will handle the UI update automatically
+            } catch (error) {
+                console.error("Error marking item as claimed:", error);
+                // Note: Using alert() here as a modal replacement for critical admin feedback
+                alert("Failed to mark item as claimed. See console."); 
+            }
+        }
+        
+
+        // --- Admin Panel Logic ---
+        
+        /**
+         * Function exposed to global scope for HTML button (Analyze Image)
+         */
+        async function analyzeImage(base64Data) {
+            const itemElement = document.getElementById('admin-analysis-result');
+            itemElement.innerHTML = '<span class="text-yellow-600">Analyzing... Please wait.</span>';
+
+            // Extract only the base64 part, removing the 'data:image/png;base64,' prefix
+            const base64Image = base64Data.split(',')[1];
+
+            const userPrompt = "Analyze this image of a lost and found item. Identify the item type and provide a suggested category (one of: electronics, keys, wallet, apparel, id_card, other). Respond ONLY with a concise JSON object containing 'item_type' and 'category'.";
+            
+            const payload = {
+                contents: [
+                    {
+                        role: "user",
+                        parts: [
+                            { text: userPrompt },
+                            {
+                                inlineData: {
+                                    mimeType: "image/png",
+                                    data: base64Image
+                                }
+                            }
+                        ]
+                    }
+                ],
+                generationConfig: {
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: "OBJECT",
+                        properties: {
+                            "item_type": { "type": "STRING", "description": "The specific item identified, e.g., 'Leather Wallet' or 'iPhone 13'." },
+                            "category": { "type": "STRING", "description": "The suggested category, must be one of: electronics, keys, wallet, apparel, id_card, other." }
+                        }
+                    }
+                }
+            };
+            
+            try {
+                const response = await fetch(`${API_URL_BASE}gemini-2.5-flash-preview-05-20:generateContent?key=${API_KEY}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                const result = await response.json();
+                const jsonText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+
+                if (jsonText) {
+                    const analysis = JSON.parse(jsonText);
+                    itemElement.innerHTML = `
+                        <div class="p-2 bg-green-50 rounded-lg border border-green-200">
+                            <p class="font-semibold">AI Analysis Result:</p>
+                            <p class="text-sm">Type: <span class="font-mono">${analysis.item_type}</span></p>
+                            <p class="text-sm">Category: <span class="font-mono text-red-600">${analysis.category}</span></p>
+                        </div>
+                    `;
+                } else {
+                    itemElement.innerHTML = '<span class="text-red-500">AI Error: No analysis generated.</span>';
+                }
+
+            } catch (error) {
+                console.error("Gemini API Error:", error);
+                itemElement.innerHTML = `<span class="text-red-500">API Failed: ${error.message || error.toString().substring(0, 50)}...</span>`;
+            }
+        }
+
+
+        /**
+         * Opens the admin modal, checking for security first.
+         */
+        function openAdminModal() {
+            document.getElementById('admin-user-id').textContent = userId;
+            window.openModal('admin-modal');
+
+            const accessMsg = document.getElementById('admin-access-msg');
+            const tableContainer = document.getElementById('admin-table-container');
+
+            if (userId === ADMIN_UID && ADMIN_UID !== "REPLACE_THIS_WITH_YOUR_USER_ID_TO_ENABLE_ADMIN_ACCESS") {
+                // Admin Access Granted
+                accessMsg.innerHTML = '<i data-lucide="unlock" class="inline w-4 h-4 mr-1"></i>Access granted.';
+                accessMsg.classList.remove('text-red-500');
+                accessMsg.classList.add('text-green-500');
+                tableContainer.classList.remove('hidden');
+                lucide.createIcons();
+                listenForAdminData();
+            } else {
+                // Admin Access Denied
+                let denialMessage = 'Access denied. This panel requires a valid Admin UID.';
+                if (ADMIN_UID === "REPLACE_THIS_WITH_YOUR_USER_ID_TO_ENABLE_ADMIN_ACCESS") {
+                    denialMessage += ' Please copy your User ID (visible above) and paste it into the ADMIN_UID variable in the code.';
+                }
+
+                accessMsg.innerHTML = `<i data-lucide="lock" class="inline w-4 h-4 mr-1"></i>${denialMessage}`;
+                accessMsg.classList.remove('text-green-500');
+                accessMsg.classList.add('text-red-500');
+                tableContainer.classList.add('hidden');
+                lucide.createIcons();
+                document.getElementById('admin-item-table-body').innerHTML = '<tr><td colspan="6" class="text-center p-4 text-gray-500">Access denied. Log in with the Admin UID.</td></tr>';
+            }
+        }
+
+        /**
+         * Fetches ALL data for the admin panel.
+         */
+        function listenForAdminData() {
+            if (!db || userId !== ADMIN_UID) return; // Double check security
+
+            const itemsRef = collection(db, ITEMS_COLLECTION_PATH);
+            const adminQuery = query(itemsRef); 
+
+            const tableBody = document.getElementById('admin-item-table-body');
+            tableBody.innerHTML = '<tr><td colspan="6" class="text-center p-4 text-gray-500">Fetching secured data...</td></tr>';
+
+            onSnapshot(adminQuery, (snapshot) => {
+                let html = '';
+                if (snapshot.empty) {
+                    tableBody.innerHTML = '<tr><td colspan="6" class="text-center p-4 text-gray-500">No items have been posted yet.</td></tr>';
+                    return;
+                }
+
+                snapshot.forEach((doc) => {
+                    const item = doc.data();
+                    const itemId = doc.id;
+                    const postedDate = item.timestamp && item.timestamp.seconds 
+                        ? new Date(item.timestamp.seconds * 1000).toLocaleString()
+                        : 'N/A';
+                    
+                    const statusClass = item.status === 'unclaimed' ? 'status-unclaimed' : 'status-claimed';
+                    const actionButton = item.status === 'unclaimed' 
+                        ? `<button onclick="markItemAsClaimed('${itemId}')" class="text-xs font-semibold px-2 py-1 rounded-full bg-red-500 text-white hover:bg-red-600 transition">Mark Claimed</button>`
+                        : `<span class="text-xs font-semibold px-2 py-1 rounded-full bg-gray-200 text-gray-700">Resolved</span>`;
+                        
+                    const base64Image = item.image_url;
+
+                    html += `
+                        <tr class="${item.status === 'claimed' ? 'bg-gray-50' : ''}">
+                            <td class="px-3 py-2 whitespace-nowrap text-sm text-gray-900">
+                                <img src="${item.image_url}" alt="Item" class="w-10 h-10 object-cover rounded-md inline mr-2 border border-gray-300">
+                                <span class="font-mono text-xs">${itemId.substring(0, 8)}...</span>
+                            </td>
+                            <td class="px-3 py-2 text-sm text-gray-600">
+                                <strong class="text-gray-900">${item.title}</strong><br>
+                                <span class="text-xs">Location: ${item.location}</span>
+                                <div id="analysis-${itemId}" class="mt-2">
+                                    <button onclick="analyzeImage('${base64Image.replace(/'/g, "\\'")}')" class="text-xs font-semibold px-2 py-1 bg-purple-500 text-white rounded-lg hover:bg-purple-600 transition mt-1">
+                                        ✨ Analyze Image
+                                    </button>
+                                    <div id="admin-analysis-result" class="mt-1 text-xs"></div>
+                                </div>
+                            </td>
+                            <td class="px-3 py-2 text-sm text-gray-600 font-mono text-xs">${item.finder_user_id.substring(0, 12)}...</td>
+                            <td class="px-3 py-2 whitespace-nowrap text-sm text-gray-600">${postedDate}</td>
+                            <td class="px-3 py-2 whitespace-nowrap">
+                                <span class="text-xs font-semibold px-2 py-1 rounded-full ${statusClass}">${item.status.toUpperCase()}</span>
+                            </td>
+                            <td class="px-3 py-2 whitespace-nowrap">${actionButton}</td>
+                        </tr>
+                    `;
+                });
+                tableBody.innerHTML = html;
+                lucide.createIcons();
+            }, (error) => {
+                console.error("Error listening to Firestore (Admin View): ", error);
+                tableBody.innerHTML = '<tr><td colspan="6" class="text-center p-4 text-red-500">Error loading admin data.</td></tr>';
+            });
+        }
+
+
+        // --- UI Feedback Functions ---
+
+        /**
+         * Shows the success notification popup on the home screen.
+         */
+        function showPostSuccessPopup() {
+            const popup = document.getElementById('post-success-popup');
+            popup.classList.add('show');
+            lucide.createIcons();
+
+            setTimeout(() => {
+                popup.classList.remove('show');
+            }, 3000);
+        }
+
+        // --- Search and Filtering ---
+
+        /**
+         * Handles the search form submission.
+         */
+        function handleSearch(event) {
+            event.preventDefault();
+            const searchTerm = document.getElementById('search-term').value.trim();
+            const categoryFilter = document.getElementById('category-filter').value;
+            
+            currentSearchQuery = {
+                keyword: searchTerm || null,
+                category: categoryFilter || null
+            };
+
+            listenForItems();
+
+            closeModal('search-modal');
+        }
+
+
+        // --- Modal Control Functions ---
+
+        /**
+         * Opens a specified modal by adding the 'active' class to its overlay.
+         */
+        function openModal(modalId) {
+            const modal = document.getElementById(modalId);
+            if (modal) {
+                modal.classList.add('active');
+            }
+        }
+
+        /**
+         * Closes a specified modal by removing the 'active' class from its overlay.
+         */
+        function closeModal(modalId) {
+            const modal = document.getElementById(modalId);
+            if (modal) {
+                modal.classList.remove('active');
+                // Clear the form and messages when closing the post modal
+                if (modalId === 'post-modal') {
+                    document.getElementById('post-form').reset();
+                    document.getElementById('post-message').classList.add('hidden');
+                    if (previewImage) previewImage.style.display = 'none'; // Hide image preview
+                }
+            }
+        }
+
+        /**
+         * Simple custom message box (replacement for alert())
+         */
+        function showCustomMessage(message) {
+            const tempModalId = 'temp-msg-modal';
+            let tempModal = document.getElementById(tempModalId);
+            
+            if (!tempModal) {
+                tempModal = document.createElement('div');
+                tempModal.id = tempModalId;
+                tempModal.className = 'modal-overlay fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-40 active';
+                tempModal.innerHTML = `
+                    <div class="bg-white rounded-xl p-6 max-w-sm w-full shadow-2xl">
+                        <h4 class="text-xl font-bold text-red-700 mb-3">Claim Instructions</h4>
+                        <p class="text-gray-700 mb-4">${message}</p>
+                        <div class="flex justify-end">
+                            <button onclick="document.getElementById('${tempModalId}').classList.remove('active');" 
+                                    class="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition">OK</button>
+                        </div>
+                    </div>
+                `;
+                document.body.appendChild(tempModal);
+            } else {
+                tempModal.querySelector('p.text-gray-700').textContent = message;
+                tempModal.classList.add('active');
+            }
+        }
+        
+        function handleClaimItem(itemId, itemTitle) {
+            showCustomMessage(`To claim the item: "${itemTitle}", please contact the finder directly using the contact details provided in the card. You will need to provide proof of ownership! (Item ID: ${itemId})`);
+        }
+        
+        // --- Gemini AI Text Generation ---
+
+        async function generateDescription() {
+            const titleEl = document.getElementById('title');
+            const descEl = document.getElementById('description');
+            const btnEl = document.getElementById('generate-desc-btn');
+            const msgEl = document.getElementById('desc-ai-message');
+            
+            const itemTitle = titleEl.value.trim();
+
+            if (itemTitle.length < 5) {
+                msgEl.textContent = "Please enter a name for the item first.";
+                return;
+            }
+
+            msgEl.textContent = "Generating detailed description...";
+            btnEl.disabled = true;
+
+            const userQuery = `Write a short, engaging, and detailed paragraph (max 3 sentences) describing the following lost item for a public lost and found post: "${itemTitle}". Focus on details a claimant would need, like material, size, and condition.`;
+            
+            const payload = {
+                contents: [{ parts: [{ text: userQuery }] }],
+                systemInstruction: {
+                    parts: [{ text: "You are a friendly, professional assistant for a Lost and Found service. Your output must be a clean, concise paragraph." }]
+                },
+                config: { maxOutputTokens: 200 } 
+            };
+            
+            try {
+                const response = await fetch(`${API_URL_BASE}gemini-2.5-flash-preview-05-20:generateContent?key=${API_KEY}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                const result = await response.json();
+                const generatedText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+
+                if (generatedText) {
+                    descEl.value = generatedText.trim();
+                    msgEl.textContent = "Description generated successfully!";
+                } else {
+                    msgEl.textContent = "AI failed to generate a description.";
+                }
+
+            } catch (error) {
+                console.error("Gemini API Error (Description):", error);
+                msgEl.textContent = "Error: Could not connect to AI service.";
+            } finally {
+                btnEl.disabled = false;
+                setTimeout(() => msgEl.textContent = "", 3000);
+            }
+        }
+
+        // --- Start the Application ---
+        document.addEventListener('DOMContentLoaded', () => {
+            lucide.createIcons();
+            initializeAppAndAuth();
+        });
+
+        // 💡 EXPOSE ALL MODULE FUNCTIONS TO THE GLOBAL WINDOW OBJECT 
+        // This is crucial for fixing the '... is not defined' error when using inline HTML event handlers.
+        window.handlePostSubmission = handlePostSubmission;
+        window.handleSearch = handleSearch;
+        window.openAdminModal = openAdminModal;
+        window.openModal = openModal;
+        window.closeModal = closeModal;
+        window.markItemAsClaimed = markItemAsClaimed;
+        window.handleClaimItem = handleClaimItem;
+        window.generateDescription = generateDescription;
+        window.analyzeImage = analyzeImage;
+        
+    </script>
+</body>
+</html>
